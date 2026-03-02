@@ -68,6 +68,9 @@ Use a Drive path for `--data-root`, for example:
   --user-agent "your-name your-email@example.com"
 ```
 
+If you see an argparse error mentioning `\\n`, it usually means literal newline placeholders were pasted.
+Use real line breaks with trailing `\` as shown above, or run as a single line.
+
 ### 5) Commit code changes back to Git (when you edit code in Colab)
 
 ```bash

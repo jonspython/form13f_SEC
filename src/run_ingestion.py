@@ -1,9 +1,17 @@
 import argparse
+import sys
 
 from pipeline import Form13FIngestionPipeline
 
 
-def parse_args() -> argparse.Namespace:
+def _sanitize_cli_tokens(argv: list[str] | None = None) -> list[str]:
+    """Drop accidental newline placeholders copied from notebook snippets."""
+
+    tokens = list(sys.argv[1:] if argv is None else argv)
+    return [token for token in tokens if token not in {"\\n", "\n"}]
+
+
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run Step-1 Form 13F ingestion pipeline")
     parser.add_argument("--quarters", type=int, default=6, help="How many quarters to retain")
     parser.add_argument(
@@ -18,7 +26,7 @@ def parse_args() -> argparse.Namespace:
         default="form13f-research/0.1 (your_email@example.com)",
         help="SEC-compliant User-Agent string",
     )
-    return parser.parse_args()
+    return parser.parse_args(_sanitize_cli_tokens(argv))
 
 
 def main() -> None:
