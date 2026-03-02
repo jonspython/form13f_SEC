@@ -8,6 +8,7 @@ from typing import Iterable
 import pandas as pd
 import requests
 import yfinance as yf
+from requests import RequestException
 
 
 @dataclass(frozen=True)
@@ -47,6 +48,7 @@ class Form13FIngestionPipeline:
         self.timeout_seconds = timeout_seconds
 
     def run(self, quarters_to_keep: int = 6) -> None:
+        self._precheck_connectivity()
         quarters = list(self._last_n_quarters(quarters_to_keep))
 
         # SEC index snapshots (by quarter)
@@ -72,6 +74,21 @@ class Form13FIngestionPipeline:
         )
 
         self._apply_file_retention(self.price_snapshots_root, quarters_to_keep)
+
+    def _precheck_connectivity(self) -> None:
+        """Fail fast with a clear error if SEC endpoints are unreachable."""
+
+        probe_url = f"{self.SEC_BASE}/"
+        try:
+            response = self.session.get(probe_url, timeout=min(self.timeout_seconds, 15))
+            response.raise_for_status()
+        except RequestException as exc:
+            raise ConnectionError(
+                "Connectivity precheck failed for SEC EDGAR index endpoint. "
+                f"Could not reach {probe_url}. "
+                "Check proxy/network settings (for example HTTPS_PROXY/HTTP_PROXY) "
+                "or retry from a network that can access www.sec.gov."
+            ) from exc
 
     def _download_and_filter_master_index(self, qref: QuarterRef) -> pd.DataFrame:
         url = f"{self.SEC_BASE}/{qref.year}/QTR{qref.quarter}/master.idx"
