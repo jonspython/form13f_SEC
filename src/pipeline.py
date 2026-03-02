@@ -9,6 +9,7 @@ import pandas as pd
 import requests
 import yfinance as yf
 from requests import RequestException
+from requests.exceptions import ProxyError
 
 
 @dataclass(frozen=True)
@@ -45,6 +46,12 @@ class Form13FIngestionPipeline:
                 "Host": "www.sec.gov",
             }
         )
+
+        # Fallback session to bypass environment proxy variables when they reject SEC.
+        self.session_no_proxy = requests.Session()
+        self.session_no_proxy.trust_env = False
+        self.session_no_proxy.headers.update(self.session.headers)
+
         self.timeout_seconds = timeout_seconds
 
     def run(self, quarters_to_keep: int = 6) -> None:
@@ -80,19 +87,28 @@ class Form13FIngestionPipeline:
 
         probe_url = f"{self.SEC_BASE}/"
         try:
-            response = self.session.get(probe_url, timeout=min(self.timeout_seconds, 15))
+            response = self._get_sec_url(probe_url, timeout=min(self.timeout_seconds, 15))
             response.raise_for_status()
         except RequestException as exc:
             raise ConnectionError(
                 "Connectivity precheck failed for SEC EDGAR index endpoint. "
                 f"Could not reach {probe_url}. "
                 "Check proxy/network settings (for example HTTPS_PROXY/HTTP_PROXY) "
-                "or retry from a network that can access www.sec.gov."
+                "or retry from a network that can access www.sec.gov. "
+                f"Last error: {exc}"
             ) from exc
+
+    def _get_sec_url(self, url: str, timeout: int) -> requests.Response:
+        """Request SEC URL and retry once without env proxies if proxy tunnel is rejected."""
+
+        try:
+            return self.session.get(url, timeout=timeout)
+        except ProxyError:
+            return self.session_no_proxy.get(url, timeout=timeout)
 
     def _download_and_filter_master_index(self, qref: QuarterRef) -> pd.DataFrame:
         url = f"{self.SEC_BASE}/{qref.year}/QTR{qref.quarter}/master.idx"
-        response = self.session.get(url, timeout=self.timeout_seconds)
+        response = self._get_sec_url(url, timeout=self.timeout_seconds)
         response.raise_for_status()
 
         lines = response.text.splitlines()
