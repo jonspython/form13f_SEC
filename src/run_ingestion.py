@@ -26,13 +26,30 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default="form13f-research/0.1 (your_email@example.com)",
         help="SEC-compliant User-Agent string",
     )
+    parser.add_argument(
+        "--stage",
+        choices=["preflight", "sec", "prices", "full"],
+        default="full",
+        help=(
+            "Pipeline stage to run: preflight (connectivity checks only), "
+            "sec (SEC only), prices (Russell/yfinance only), or full (default)."
+        ),
+    )
     return parser.parse_args(_sanitize_cli_tokens(argv))
 
 
 def main() -> None:
     args = parse_args()
     pipeline = Form13FIngestionPipeline(data_root=args.data_root, user_agent=args.user_agent)
-    pipeline.run(quarters_to_keep=args.quarters)
+
+    if args.stage == "preflight":
+        pipeline.run_preflight_checks()
+    elif args.stage == "sec":
+        pipeline.run_sec_ingestion(quarters_to_keep=args.quarters)
+    elif args.stage == "prices":
+        pipeline.run_price_ingestion(files_to_keep=args.quarters)
+    else:
+        pipeline.run(quarters_to_keep=args.quarters)
 
 
 if __name__ == "__main__":

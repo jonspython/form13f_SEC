@@ -71,6 +71,39 @@ Use a Drive path for `--data-root`, for example:
 If you see an argparse error mentioning `\\n`, it usually means literal newline placeholders were pasted.
 Use real line breaks with trailing `\` as shown above, or run as a single line.
 
+### 4b) Run independent stages (recommended for debugging)
+
+You can now run each dependency path independently before full ingestion:
+
+```bash
+# SEC + Yahoo reachability checks only
+python src/run_ingestion.py --stage preflight --user-agent "your-name your-email@example.com"
+
+# SEC ingest only (13F master index by quarter)
+python src/run_ingestion.py --stage sec --quarters 6 --data-root /content/drive/MyDrive/form13f_data --user-agent "your-name your-email@example.com"
+
+# Russell 2000 + Yahoo prices only
+python src/run_ingestion.py --stage prices --quarters 6 --data-root /content/drive/MyDrive/form13f_data --user-agent "your-name your-email@example.com"
+
+# Full pipeline (default)
+python src/run_ingestion.py --stage full --quarters 6 --data-root /content/drive/MyDrive/form13f_data --user-agent "your-name your-email@example.com"
+```
+
+This makes it easy to isolate whether failures are SEC-related, Yahoo-related, or processing-related.
+
+### 4c) Connectivity troubleshooting
+
+If a stage fails with `ProxyError`, `CONNECT tunnel failed`, or `403 Forbidden`, check whether your environment is forcing proxy settings:
+
+```bash
+env | rg -i '^(http|https|all|no)_proxy='
+```
+
+- SEC failures indicate your path to `www.sec.gov` is blocked by proxy/network policy.
+- Yahoo failures indicate your path to Yahoo endpoints (used by `yfinance`) is blocked.
+
+Fix by allowlisting required domains in your proxy, using a network without forced proxy, or setting `NO_PROXY` appropriately if direct egress is allowed.
+
 ### 5) Commit code changes back to Git (when you edit code in Colab)
 
 ```bash

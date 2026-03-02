@@ -8,6 +8,8 @@ from typing import Iterable
 import pandas as pd
 import requests
 import yfinance as yf
+from requests import RequestException
+from requests.exceptions import ProxyError
 
 
 @dataclass(frozen=True)
@@ -44,12 +46,32 @@ class Form13FIngestionPipeline:
                 "Host": "www.sec.gov",
             }
         )
+
+        # Fallback session to bypass environment proxy variables when they reject SEC.
+        self.session_no_proxy = requests.Session()
+        self.session_no_proxy.trust_env = False
+        self.session_no_proxy.headers.update(self.session.headers)
+
         self.timeout_seconds = timeout_seconds
 
     def run(self, quarters_to_keep: int = 6) -> None:
-        quarters = list(self._last_n_quarters(quarters_to_keep))
+        """Run full ingestion pipeline after checking external dependencies."""
 
-        # SEC index snapshots (by quarter)
+        self.run_preflight_checks()
+        self.run_sec_ingestion(quarters_to_keep=quarters_to_keep)
+        self.run_price_ingestion(files_to_keep=quarters_to_keep)
+
+    def run_preflight_checks(self) -> None:
+        """Validate outbound access required for SEC and Yahoo Finance dependencies."""
+
+        self._precheck_connectivity()
+        self._precheck_yfinance_connectivity()
+
+    def run_sec_ingestion(self, quarters_to_keep: int = 6) -> None:
+        """Download and retain SEC index snapshots only."""
+
+        self._precheck_connectivity()
+        quarters = list(self._last_n_quarters(quarters_to_keep))
         for qref in quarters:
             filings_df = self._download_and_filter_master_index(qref)
             out_dir = self.sec_index_root / qref.label
@@ -58,7 +80,10 @@ class Form13FIngestionPipeline:
 
         self._apply_quarter_dir_retention(self.sec_index_root, quarters_to_keep)
 
-        # Russell 2000 ticker universe + latest price snapshot
+    def run_price_ingestion(self, files_to_keep: int = 6) -> None:
+        """Download Russell 2000 list and latest Yahoo Finance price snapshot only."""
+
+        self._precheck_yfinance_connectivity()
         tickers_df = self._download_russell_2000_tickers()
         self.prices_root.mkdir(parents=True, exist_ok=True)
         tickers_df.to_csv(self.prices_root / "russell2000_tickers.csv", index=False)
@@ -71,11 +96,49 @@ class Form13FIngestionPipeline:
             index=False,
         )
 
-        self._apply_file_retention(self.price_snapshots_root, quarters_to_keep)
+        self._apply_file_retention(self.price_snapshots_root, files_to_keep)
+
+    def _precheck_connectivity(self) -> None:
+        """Fail fast with a clear error if SEC endpoints are unreachable."""
+
+        probe_url = f"{self.SEC_BASE}/"
+        try:
+            response = self._get_sec_url(probe_url, timeout=min(self.timeout_seconds, 15))
+            response.raise_for_status()
+        except RequestException as exc:
+            raise ConnectionError(
+                "SEC connectivity precheck failed. "
+                f"Could not reach {probe_url}. "
+                "Check proxy/network settings (for example HTTPS_PROXY/HTTP_PROXY) "
+                "or retry from a network that can access www.sec.gov. "
+                f"Last error: {exc}"
+            ) from exc
+
+    def _precheck_yfinance_connectivity(self) -> None:
+        """Fail fast with a clear error if Yahoo Finance dependencies are unreachable."""
+
+        try:
+            history = yf.Ticker("AAPL").history(period="1d", auto_adjust=False)
+            if history.empty:
+                raise ConnectionError("Received empty price history for AAPL.")
+        except Exception as exc:  # noqa: BLE001
+            raise ConnectionError(
+                "Yahoo Finance connectivity precheck failed. "
+                "Could not fetch sample ticker data for AAPL. "
+                f"Last error: {exc}"
+            ) from exc
+
+    def _get_sec_url(self, url: str, timeout: int) -> requests.Response:
+        """Request SEC URL and retry once without env proxies if proxy tunnel is rejected."""
+
+        try:
+            return self.session.get(url, timeout=timeout)
+        except ProxyError:
+            return self.session_no_proxy.get(url, timeout=timeout)
 
     def _download_and_filter_master_index(self, qref: QuarterRef) -> pd.DataFrame:
         url = f"{self.SEC_BASE}/{qref.year}/QTR{qref.quarter}/master.idx"
-        response = self.session.get(url, timeout=self.timeout_seconds)
+        response = self._get_sec_url(url, timeout=self.timeout_seconds)
         response.raise_for_status()
 
         lines = response.text.splitlines()
